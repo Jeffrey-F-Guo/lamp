@@ -94,6 +94,15 @@ button:disabled {
     transform: none;
 }
 
+.thumbnails-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 20px;
+    width: 100%;
+    max-width: 800px;
+    padding: 20px;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
     .file-upload-box {
