@@ -1,20 +1,32 @@
 import './FileUpload.css';
-import { useState, useEffect } from 'react';
 import FileThumbnail from './FileThumbnail';
+
+import { useState, useEffect } from 'react';
+import heic2any from 'heic2any';
+
 
 function FileUpload() {
     const NUM_DISPLAY_TILES = 8
+    const CONVERSIONSUFFIX = 'jpg'
     const [files, setFiles] = useState<File[]>([])
     const [fileNames, setFileNames] = useState<Set<string>>(new Set())
     const [previews, setPreviews] = useState<Map<string, string>>(new Map())
-    {/*Testing and debugging, can delete later*/ }
+
+    /*Testing and debugging, can delete later*/
     useEffect(() => {
         console.log(files, previews)
     }, [files, previews])
 
     const convertHEIC = async (heicFiles: File[]): Promise<File[]> => {
+        const convertedFiles: File[] = []
         console.log(heicFiles)
-        return []
+        for (const file of heicFiles) {
+            const converted = await heic2any({blob: file})
+            const convertedBlob = Array.isArray(converted)? converted[0] : converted
+            const newFile = new File([convertedBlob], file.name.replace(/\.heic$i/, CONVERSIONSUFFIX), {type: 'image/jpeg'})
+            convertedFiles.push(newFile)
+        }
+        return convertedFiles
     }
 
     const addFiles = async (fileList: FileList) => {
@@ -24,13 +36,19 @@ function FileUpload() {
 
         for (const file of newFiles) {
             // Skip if file already exists
-            if (fileNames.has(file.name)) {
+            const isHEIC: boolean = file.name.toLowerCase().endsWith('.heic')
+            if (fileNames.has(file.name) || (isHEIC && fileNames.has(file.name.replace(/\.heic$i/, CONVERSIONSUFFIX)))) {
                 console.log(`Skipping duplicate file: ${file.name}`)
                 continue
             }
 
-            if (file.name.toLowerCase().endsWith('.heic')) {
+            // check if the file type is what the extension says it is
+            // do later - this is security
+            
+
+            if (isHEIC) {
                 heicFiles.push(file)
+
             } else {
                 validFiles.push(file)
                 const url = URL.createObjectURL(file)
@@ -57,7 +75,7 @@ function FileUpload() {
             }
 
             if (convertedFiles.length > 0) {
-                setFiles((curFiles) => [...curFiles, ...convertedFiles])
+                setFiles((curFiles) => [...convertedFiles, ...curFiles])
                 setFileNames((prev) => {
                     const newSet = new Set(prev)
                     convertedFiles.forEach(f => newSet.add(f.name))
@@ -101,9 +119,18 @@ function FileUpload() {
             addFiles(droppedFiles);
         }
     }
+
+    // put this in later lol
+    const validateFile = (file: File): boolean => {
+        // accept file if a valid magic number appears within the first 1024 bytes
+        return true;
+    }
+
     const submitFiles = () => {
         // submit files to aws
         console.log("submitted!")
+        // make a request to lambda function for s3 signed urls
+
     }
 
     const renderThumbnails = () => {
