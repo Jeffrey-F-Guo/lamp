@@ -1,7 +1,8 @@
 """
 Lambda function to give permission to frontend to upload files to s3.
 """
-
+# Refactored + better version in accept-files-dev.py
+# This file will be deleted later
 import logging
 import boto3
 from botocore.exceptions import ClientError
@@ -62,15 +63,15 @@ def lambda_handler(event, context):
 
 
 
-# later. need for cacheing
-def gen_hash():
-    # generate hash of the file based on it's name, size, data, and metadata
-    pass
+# # later. need for cacheing
+# def gen_hash():
+#     # generate hash of the file based on it's name, size, data, and metadata
+#     pass
 
-def check_cache(hash):
-    # check dynamodb to see if the current file has been processed within the last 24 hours
-    # return a json: {True, data} or {False, blah blah}
-    pass
+# def check_cache(hash):
+#     # check dynamodb to see if the current file has been processed within the last 24 hours
+#     # return a json: {True, data} or {False, blah blah}
+#     pass
 
 
 
@@ -99,6 +100,7 @@ def generate_presigned_put(s3_client, bucket, key, expires_in):
     return url
 
 def main():
+    # for local testing
     bucket_name = os.getenv('BUCKET_NAME')
     s3_object_key = "finalpythontest.txt"
     s3_client = boto3.client(

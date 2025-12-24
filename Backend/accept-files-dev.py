@@ -31,15 +31,17 @@ class FileObj:
 # ==================
 _s3_client: Optional[Any] = None
 
+# Singleton pattern!
 def get_s3_client():
     global _s3_client
     if not _s3_client:
         try:
             _s3_client = boto3.client(
                 's3',
-                region_name=os.getenv('AWS_REGION'),
-                aws_access_key_id=os.getenv('ACCESS_KEY'),
-                aws_secret_access_key=os.getenv('SECRET_KEY'),
+                # Use lambda's local environment for prod
+                # region_name=os.getenv('AWS_REGION'),
+                # aws_access_key_id=os.getenv('ACCESS_KEY'),
+                # aws_secret_access_key=os.getenv('SECRET_KEY'),
                 config=Config(signature_version="s3v4")
             )
         except ClientError:
@@ -51,7 +53,7 @@ def get_s3_client():
 # ==================
 # Validation
 # ==================
-
+# Pydantic would be better....future refactor?
 def validate_file(allowed_types: Set, file_obj: FileObj) -> Tuple[bool, str]:
     # smaller than max size
     if file_obj.filesize > MAX_FILE_SIZE:
@@ -201,9 +203,3 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             'Access-Control-Allow-Headers': 'Content-Type'
         }
     }
-
-def test_locally():
-    pass
-
-if __name__ == '__main__':
-    test_locally()
