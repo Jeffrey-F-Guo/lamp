@@ -1,7 +1,7 @@
 
 from typing import Dict, Any, List, Set, Optional, Tuple
 import logging
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 import os
 import json
 from uuid import uuid4
@@ -12,13 +12,14 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-load_dotenv()
+# load_dotenv()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024 # 10MB
 ALLOWED_TYPES = {'image/jpeg', 'image/jpg', 'image/png', 'application/pdf'}
+UPLOAD_DIR_NAME = 'uploads/'
 
 @dataclass
 class FileObj:
@@ -100,7 +101,7 @@ def create_object_key(filename: str) -> str:
     if file_extension == "":
         return ""
     uuid = str(uuid4())
-    object_key = f'receipt_{uuid}.{file_extension}'
+    object_key = f'{UPLOAD_DIR_NAME}receipt_{uuid}.{file_extension}'
     return object_key
 
 
@@ -187,6 +188,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             s3_client=s3_client, 
             bucket=bucket, 
             object_key=object_key, 
+            content_type=filetype,
             expires_in=3600
         )
 

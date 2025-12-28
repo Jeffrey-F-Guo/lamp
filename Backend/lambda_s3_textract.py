@@ -1,29 +1,37 @@
 """
-File to experiment with textract before deployment
-"""
+Lambda function triggered by S3 object creation.
+Processes receipts using AWS Textract.
 
-
-"""
-NOTES:
-In the real version lambda can send s3 urls rather than the entire file, triggering textract extraction
+S3 Event Structure:
+{
+  'Records': [
+    {
+      's3': {
+        'bucket': {'name': 'bucket-name'},
+        'object': {'key': 'receipt_UUID.jpg'}
+      }
+    }
+  ]
+}
 """
 
 import boto3
-from pydantic import BaseModel, ValidationError
-import logging
-from typing import List, Dict, Any, Optional
 import json
+import logging
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-file = 'receipts.jpg'
-
-client = boto3.client('textract')
-
+# Initialize clients outside handler for reuse across invocations
+s3_client = boto3.client('s3')
+textract_client = boto3.client('textract')
 
 class ReceiptItem(BaseModel):
     item_name: str
-    price: str # NOTE: maybe change to float in the future if math is needed
+    price: str
+
 
 class Receipt(BaseModel):
     store_name: Optional[str] = None
@@ -33,79 +41,93 @@ class Receipt(BaseModel):
 
 
 class InvalidTextractResponse(Exception):
-    """Exception raised for invalid AWS Textract response format. """
-    def __init__(self, missing_field: str, 
+    """Exception raised for invalid AWS Textract response format."""
+    def __init__(self, missing_field: str,
                 message='Invalid AWS Textract response format. Missing key fields:'):
         self.missing_field = missing_field
         self.message = message
-
         super().__init__(self.message)
 
     def __str__(self):
-        return f"{self.message} {self.missing_field} "
+        return f"{self.message} {self.missing_field}"
 
-def extract_single_file(file: str) -> Dict[str, Any]:
+
+def lambda_handler(event, context):
     """
-    Extract and parse receipt data from a single file.
+    Lambda handler triggered by S3 object creation.
 
     Args:
-        file: Path to the receipt image file
+        event: S3 event containing bucket name and object key
+        context: Lambda context object
 
     Returns:
-        Dictionary with 'statusCode' and 'body' keys containing parsed receipt data or error
+        Response with statusCode and body
     """
-    if not file:
-        logger.error("No file provided")
+
+    # Extract S3 event information
+    try:
+        record = event['Records'][0]
+        bucket = record['s3']['bucket']['name']
+        key = record['s3']['object']['key']
+
+        logger.info(f"Processing S3 object: s3://{bucket}/{key}")
+
+    except (KeyError, IndexError) as e:
+        logger.error(f"Invalid S3 event structure: {e}")
         return {
             'statusCode': 400,
-            'body': json.dumps({'error': 'No file provided'})
+            'body': json.dumps({'error': 'Invalid S3 event'})
         }
 
+    # Process receipt with Textract
     try:
-        with open(file, 'rb') as f:
-            file_byte_data = f.read()
+        # Call Textract with S3 reference
+        logger.info("Calling Textract analyze_expense...")
+        response = textract_client.analyze_expense(
+            Document={
+                'S3Object': {
+                    'Bucket': bucket,
+                    'Name': key
+                }
+            }
+        )
 
-            response: Dict[str, Any] = client.analyze_expense(
-                Document = {
-                    'Bytes': file_byte_data
-                }
-            )
-            print(response)
-            try:
-                cleaned_text = parse_extracted_text(response)
-                return {
-                    'statusCode': 200,
-                    'body': json.dumps(cleaned_text)
-                }
-            except InvalidTextractResponse as e:
-                # catch format errors
-                logger.error(f"Invalid Textract response format: {e}")
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps({'error': f'Invalid response format: {str(e)}'})
-                }
-            except Exception as e:
-                # general unexpected errors during parsing
-                logger.error(f'Error parsing Textract response: {e}', exc_info=True)
-                return {
-                    'statusCode': 500,
-                    'body': json.dumps({'error': 'Failed to parse receipt data'})
-                }
-    except FileNotFoundError as e:
-        logger.error(f"File not found: {file}")
+        logger.info("Textract analysis complete, parsing results...")
+
+        # Parse Textract response
+        parsed_receipts = parse_extracted_text(response)
+
+        logger.info(f"Successfully parsed {len(parsed_receipts)} receipt(s)")
+
         return {
-            'statusCode': 404,
-            'body': json.dumps({'error': f'File not found: {file}'})
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': 'Receipt processed successfully',
+                'receipts': parsed_receipts
+            })
         }
+
+    except InvalidTextractResponse as e:
+        logger.error(f"Invalid Textract response: {e}")
+
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': str(e)})
+        }
+
     except Exception as e:
-        logger.error(f'Error reading file or calling Textract: {e}', exc_info=True)
+        logger.error(f"Error processing receipt: {e}", exc_info=True)
         return {
             'statusCode': 500,
-            'body': json.dumps({'error': 'Failed to process file'})
+            'body': json.dumps({'error': 'Failed to process receipt'})
         }
 
 
-def parse_extracted_text(textract_response: Dict[str, Any]) -> List[str]:
+# ===========================
+# TEXTRACT PARSING FUNCTIONS
+# ===========================
+
+def parse_extracted_text(textract_response: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Parse Textract response into structured receipt data.
 
@@ -113,14 +135,14 @@ def parse_extracted_text(textract_response: Dict[str, Any]) -> List[str]:
         textract_response: Raw response from Textract analyze_expense call
 
     Returns:
-        List of JSON strings, each representing a parsed receipt
+        List of dictionaries, each representing a parsed receipt
 
     Raises:
         InvalidTextractResponse: If response format is invalid
     """
 
     expense_docs = get_expense_documents(textract_response)
-    parsed_docs: List[str] = []
+    parsed_docs: List[Dict[str, Any]] = []
 
     # Every expense doc has a summary and lineitems
     for i, doc in enumerate(expense_docs):
@@ -145,41 +167,9 @@ def parse_extracted_text(textract_response: Dict[str, Any]) -> List[str]:
 
     return parsed_docs
 
-################
-# GETTER METHODS
-################
-def get_num_documents(textract_response: Dict[str, Any]) -> int:
-    """
-    Get the number of pages in the document.
-
-    Args:
-        textract_response: Raw Textract response
-
-    Returns:
-        Number of pages processed
-
-    Raises:
-        InvalidTextractResponse: If DocumentMetadata is missing
-    """
-    if 'DocumentMetadata' not in textract_response:
-        logger.error('Textract response missing DocumentMetadata')
-        raise InvalidTextractResponse('DocumentMetadata')
-    return textract_response['DocumentMetadata']['Pages']
-
 
 def get_expense_documents(textract_response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Extract ExpenseDocuments from Textract response.
-
-    Args:
-        textract_response: Raw Textract response
-
-    Returns:
-        List of expense document dictionaries
-
-    Raises:
-        InvalidTextractResponse: If ExpenseDocuments is missing
-    """
+    """Extract ExpenseDocuments from Textract response."""
     if 'ExpenseDocuments' not in textract_response:
         logger.error('Textract response missing ExpenseDocuments')
         raise InvalidTextractResponse('ExpenseDocuments')
@@ -187,19 +177,7 @@ def get_expense_documents(textract_response: Dict[str, Any]) -> List[Dict[str, A
 
 
 def get_summary_fields(expense_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Extract SummaryFields from an expense document.
-    SummaryFields: Information found outside of a table by Amazon Textract.
-
-    Args:
-        expense_doc: Single expense document from Textract
-
-    Returns:
-        List of summary field dictionaries
-
-    Raises:
-        InvalidTextractResponse: If SummaryFields is missing
-    """
+    """Extract SummaryFields from an expense document."""
     if 'SummaryFields' not in expense_doc:
         logger.error('Expense document missing SummaryFields')
         raise InvalidTextractResponse('SummaryFields')
@@ -207,23 +185,12 @@ def get_summary_fields(expense_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def get_line_item_groups(expense_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Extract LineItemGroups from an expense document.
-    LineItemGroups: Tabular data extracted by Amazon Textract.
-
-    Args:
-        expense_doc: Single expense document from Textract
-
-    Returns:
-        List of line item group dictionaries
-
-    Raises:
-        InvalidTextractResponse: If LineItemGroups is missing
-    """
+    """Extract LineItemGroups from an expense document."""
     if 'LineItemGroups' not in expense_doc:
         logger.error('Expense document missing LineItemGroups')
         raise InvalidTextractResponse('LineItemGroups')
     return expense_doc['LineItemGroups']
+
 
 def parse_lineitemgroups(line_item_groups: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """
@@ -249,11 +216,12 @@ def parse_lineitemgroups(line_item_groups: List[Dict[str, Any]]) -> List[Dict[st
                 expense_fields = line['LineItemExpenseFields']
 
                 # container to hold the data for a single expense row
-                # not using default EXPENSE_ROW tag from textract because it has unneeded data for our purpose
                 row: Dict[str, str] = {}
                 for field in expense_fields:
                     value = field['ValueDetection']['Text']
-                    if ((field_label := field['Type']['Text']) == 'ITEM'):
+                    field_label = field['Type']['Text']
+
+                    if field_label == 'ITEM':
                         row['item_name'] = value
                     elif field_label == 'PRICE':
                         row['price'] = value
@@ -313,9 +281,3 @@ def parse_summaryfields(summary_fields: List[Dict[str, Any]]) -> Dict[str, str]:
         raise InvalidTextractResponse(f"SummaryFields - parsing error: {str(e)}")
 
     return important_fields
-
-
-
-if __name__ == '__main__':
-    file_content = extract_single_file(file)
-    print(file_content)
